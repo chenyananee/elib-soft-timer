@@ -9,7 +9,7 @@ static elib_timer_instance_t* get_timer_by_id(elib_timer_ctx_t *ctx, uint32_t ti
 /* Find a free timer slot */
 static elib_timer_instance_t* find_free_timer(elib_timer_ctx_t *ctx) {
     for (uint32_t i = 0; i < ctx->max_timers; i++) {
-        if (ctx->timers[i].state == ELIB_TIMER_STATE_UNUSED) {
+        if (ctx->timers[i].bit_flags.state == ELIB_TIMER_STATE_UNUSED) {
             return &ctx->timers[i];
         }
     }
@@ -38,7 +38,7 @@ elib_timer_err_t elib_timer_init(elib_timer_ctx_t *ctx,
     ctx->timers = timers;
     ctx->max_timers = max_timers;
     ctx->active_count = 0;
-    ctx->initialized = 1;
+    ctx->bit_flags.initialized = 1;
 
     return ELIB_TIMER_OK;
 }
@@ -48,7 +48,7 @@ void elib_timer_deinit(elib_timer_ctx_t *ctx) {
     if (ctx == NULL) {
         return;
     }
-    ctx->initialized = 0;
+    ctx->bit_flags.initialized = 0;
 }
 
 /* Create a new timer */
@@ -62,7 +62,7 @@ elib_timer_err_t elib_timer_create(elib_timer_ctx_t *ctx,
     if (ctx == NULL || callback == NULL || out_timer_id == NULL) {
         return ELIB_TIMER_ERR_INVALID_PARAM;
     }
-    if (!ctx->initialized) {
+    if (!ctx->bit_flags.initialized) {
         return ELIB_TIMER_ERR_NOT_INITIALIZED;
     }
     if (period_ms == 0) {
@@ -81,13 +81,13 @@ elib_timer_err_t elib_timer_create(elib_timer_ctx_t *ctx,
     memset(timer, 0, sizeof(elib_timer_instance_t));
     timer->callback = callback;
     timer->user_data = user_data;
-    timer->exec_mode = exec_mode;
+    timer->bit_flags.exec_mode = exec_mode;
     timer->period_ms = period_ms;
     timer->remaining_ms = period_ms;
     timer->loop_count = loop_count;
     timer->loop_remaining = loop_count;
-    timer->state = ELIB_TIMER_STATE_STOPPED;
-    timer->pending_execution = false;
+    timer->bit_flags.state = ELIB_TIMER_STATE_STOPPED;
+    timer->bit_flags.pending_execution = false;
 
     *out_timer_id = timer_id;
     ctx->active_count++;
@@ -100,7 +100,7 @@ elib_timer_err_t elib_timer_delete(elib_timer_ctx_t *ctx, uint32_t timer_id) {
     if (ctx == NULL) {
         return ELIB_TIMER_ERR_INVALID_PARAM;
     }
-    if (!ctx->initialized) {
+    if (!ctx->bit_flags.initialized) {
         return ELIB_TIMER_ERR_NOT_INITIALIZED;
     }
 
@@ -108,11 +108,11 @@ elib_timer_err_t elib_timer_delete(elib_timer_ctx_t *ctx, uint32_t timer_id) {
     if (timer == NULL) {
         return ELIB_TIMER_ERR_NOT_FOUND;
     }
-    if (timer->state == ELIB_TIMER_STATE_UNUSED) {
+    if (timer->bit_flags.state == ELIB_TIMER_STATE_UNUSED) {
         return ELIB_TIMER_ERR_NOT_FOUND;
     }
 
-    timer->state = ELIB_TIMER_STATE_UNUSED;
+    timer->bit_flags.state = ELIB_TIMER_STATE_UNUSED;
     ctx->active_count--;
 
     return ELIB_TIMER_OK;
@@ -123,7 +123,7 @@ elib_timer_err_t elib_timer_start(elib_timer_ctx_t *ctx, uint32_t timer_id) {
     if (ctx == NULL) {
         return ELIB_TIMER_ERR_INVALID_PARAM;
     }
-    if (!ctx->initialized) {
+    if (!ctx->bit_flags.initialized) {
         return ELIB_TIMER_ERR_NOT_INITIALIZED;
     }
 
@@ -131,14 +131,14 @@ elib_timer_err_t elib_timer_start(elib_timer_ctx_t *ctx, uint32_t timer_id) {
     if (timer == NULL) {
         return ELIB_TIMER_ERR_NOT_FOUND;
     }
-    if (timer->state == ELIB_TIMER_STATE_UNUSED) {
+    if (timer->bit_flags.state == ELIB_TIMER_STATE_UNUSED) {
         return ELIB_TIMER_ERR_NOT_FOUND;
     }
-    if (timer->state == ELIB_TIMER_STATE_RUNNING) {
+    if (timer->bit_flags.state == ELIB_TIMER_STATE_RUNNING) {
         return ELIB_TIMER_ERR_ALREADY_RUNNING;
     }
 
-    timer->state = ELIB_TIMER_STATE_RUNNING;
+    timer->bit_flags.state = ELIB_TIMER_STATE_RUNNING;
     timer->remaining_ms = timer->period_ms;
     if (timer->loop_count > 0) {
         timer->loop_remaining = timer->loop_count;
@@ -152,7 +152,7 @@ elib_timer_err_t elib_timer_stop(elib_timer_ctx_t *ctx, uint32_t timer_id) {
     if (ctx == NULL) {
         return ELIB_TIMER_ERR_INVALID_PARAM;
     }
-    if (!ctx->initialized) {
+    if (!ctx->bit_flags.initialized) {
         return ELIB_TIMER_ERR_NOT_INITIALIZED;
     }
 
@@ -160,14 +160,14 @@ elib_timer_err_t elib_timer_stop(elib_timer_ctx_t *ctx, uint32_t timer_id) {
     if (timer == NULL) {
         return ELIB_TIMER_ERR_NOT_FOUND;
     }
-    if (timer->state == ELIB_TIMER_STATE_UNUSED) {
+    if (timer->bit_flags.state == ELIB_TIMER_STATE_UNUSED) {
         return ELIB_TIMER_ERR_NOT_FOUND;
     }
-    if (timer->state == ELIB_TIMER_STATE_STOPPED) {
+    if (timer->bit_flags.state == ELIB_TIMER_STATE_STOPPED) {
         return ELIB_TIMER_ERR_NOT_RUNNING;
     }
 
-    timer->state = ELIB_TIMER_STATE_STOPPED;
+    timer->bit_flags.state = ELIB_TIMER_STATE_STOPPED;
     timer->remaining_ms = timer->period_ms;
 
     return ELIB_TIMER_OK;
@@ -178,7 +178,7 @@ elib_timer_err_t elib_timer_pause(elib_timer_ctx_t *ctx, uint32_t timer_id) {
     if (ctx == NULL) {
         return ELIB_TIMER_ERR_INVALID_PARAM;
     }
-    if (!ctx->initialized) {
+    if (!ctx->bit_flags.initialized) {
         return ELIB_TIMER_ERR_NOT_INITIALIZED;
     }
 
@@ -186,11 +186,11 @@ elib_timer_err_t elib_timer_pause(elib_timer_ctx_t *ctx, uint32_t timer_id) {
     if (timer == NULL) {
         return ELIB_TIMER_ERR_NOT_FOUND;
     }
-    if (timer->state != ELIB_TIMER_STATE_RUNNING) {
+    if (timer->bit_flags.state != ELIB_TIMER_STATE_RUNNING) {
         return ELIB_TIMER_ERR_NOT_RUNNING;
     }
 
-    timer->state = ELIB_TIMER_STATE_PAUSED;
+    timer->bit_flags.state = ELIB_TIMER_STATE_PAUSED;
 
     return ELIB_TIMER_OK;
 }
@@ -200,7 +200,7 @@ elib_timer_err_t elib_timer_resume(elib_timer_ctx_t *ctx, uint32_t timer_id) {
     if (ctx == NULL) {
         return ELIB_TIMER_ERR_INVALID_PARAM;
     }
-    if (!ctx->initialized) {
+    if (!ctx->bit_flags.initialized) {
         return ELIB_TIMER_ERR_NOT_INITIALIZED;
     }
 
@@ -208,11 +208,11 @@ elib_timer_err_t elib_timer_resume(elib_timer_ctx_t *ctx, uint32_t timer_id) {
     if (timer == NULL) {
         return ELIB_TIMER_ERR_NOT_FOUND;
     }
-    if (timer->state != ELIB_TIMER_STATE_PAUSED) {
+    if (timer->bit_flags.state != ELIB_TIMER_STATE_PAUSED) {
         return ELIB_TIMER_ERR_NOT_RUNNING;
     }
 
-    timer->state = ELIB_TIMER_STATE_RUNNING;
+    timer->bit_flags.state = ELIB_TIMER_STATE_RUNNING;
 
     return ELIB_TIMER_OK;
 }
@@ -224,7 +224,7 @@ elib_timer_err_t elib_timer_set_period(elib_timer_ctx_t *ctx,
     if (ctx == NULL) {
         return ELIB_TIMER_ERR_INVALID_PARAM;
     }
-    if (!ctx->initialized) {
+    if (!ctx->bit_flags.initialized) {
         return ELIB_TIMER_ERR_NOT_INITIALIZED;
     }
     if (period_ms == 0) {
@@ -235,7 +235,7 @@ elib_timer_err_t elib_timer_set_period(elib_timer_ctx_t *ctx,
     if (timer == NULL) {
         return ELIB_TIMER_ERR_NOT_FOUND;
     }
-    if (timer->state == ELIB_TIMER_STATE_UNUSED) {
+    if (timer->bit_flags.state == ELIB_TIMER_STATE_UNUSED) {
         return ELIB_TIMER_ERR_NOT_FOUND;
     }
 
@@ -246,7 +246,7 @@ elib_timer_err_t elib_timer_set_period(elib_timer_ctx_t *ctx,
     timer->period_ms = period_ms;
 
     /* If running, adjust remaining time proportionally */
-    if (timer->state == ELIB_TIMER_STATE_RUNNING && old_period != 0) {
+    if (timer->bit_flags.state == ELIB_TIMER_STATE_RUNNING && old_period != 0) {
         /* Use 64-bit to prevent intermediate overflow */
         uint64_t temp = (uint64_t)timer->remaining_ms * period_ms;
         timer->remaining_ms = (uint32_t)(temp / old_period);
@@ -265,7 +265,7 @@ elib_timer_err_t elib_timer_set_loop_count(elib_timer_ctx_t *ctx,
     if (ctx == NULL) {
         return ELIB_TIMER_ERR_INVALID_PARAM;
     }
-    if (!ctx->initialized) {
+    if (!ctx->bit_flags.initialized) {
         return ELIB_TIMER_ERR_NOT_INITIALIZED;
     }
 
@@ -273,7 +273,7 @@ elib_timer_err_t elib_timer_set_loop_count(elib_timer_ctx_t *ctx,
     if (timer == NULL) {
         return ELIB_TIMER_ERR_NOT_FOUND;
     }
-    if (timer->state == ELIB_TIMER_STATE_UNUSED) {
+    if (timer->bit_flags.state == ELIB_TIMER_STATE_UNUSED) {
         return ELIB_TIMER_ERR_NOT_FOUND;
     }
 
@@ -290,7 +290,7 @@ elib_timer_err_t elib_timer_get_remaining(elib_timer_ctx_t *ctx,
     if (ctx == NULL || out_remaining_ms == NULL) {
         return ELIB_TIMER_ERR_INVALID_PARAM;
     }
-    if (!ctx->initialized) {
+    if (!ctx->bit_flags.initialized) {
         return ELIB_TIMER_ERR_NOT_INITIALIZED;
     }
 
@@ -298,7 +298,7 @@ elib_timer_err_t elib_timer_get_remaining(elib_timer_ctx_t *ctx,
     if (timer == NULL) {
         return ELIB_TIMER_ERR_NOT_FOUND;
     }
-    if (timer->state == ELIB_TIMER_STATE_UNUSED) {
+    if (timer->bit_flags.state == ELIB_TIMER_STATE_UNUSED) {
         return ELIB_TIMER_ERR_NOT_FOUND;
     }
 
@@ -312,14 +312,14 @@ elib_timer_err_t elib_timer_manager(elib_timer_ctx_t *ctx, uint32_t ms_elapsed) 
     if (ctx == NULL) {
         return ELIB_TIMER_ERR_INVALID_PARAM;
     }
-    if (!ctx->initialized) {
+    if (!ctx->bit_flags.initialized) {
         return ELIB_TIMER_ERR_NOT_INITIALIZED;
     }
 
     for (uint32_t i = 0; i < ctx->max_timers; i++) {
         elib_timer_instance_t *timer = &ctx->timers[i];
 
-        if (timer->state != ELIB_TIMER_STATE_RUNNING) {
+        if (timer->bit_flags.state != ELIB_TIMER_STATE_RUNNING) {
             continue;
         }
 
@@ -338,18 +338,18 @@ elib_timer_err_t elib_timer_manager(elib_timer_ctx_t *ctx, uint32_t ms_elapsed) 
             timer->loop_remaining--;
             if (timer->loop_remaining == 0) {
                 continue_running = false;
-                timer->state = ELIB_TIMER_STATE_EXPIRED;
+                timer->bit_flags.state = ELIB_TIMER_STATE_EXPIRED;
             }
         }
 
         /* Execute callback based on mode */
-        switch (timer->exec_mode) {
+        switch (timer->bit_flags.exec_mode) {
             case ELIB_TIMER_MODE_IMMEDIATE:
                 timer->callback(timer->user_data);
                 break;
 
             case ELIB_TIMER_MODE_DELAYED:
-                timer->pending_execution = true;
+                timer->bit_flags.pending_execution = true;
                 break;
         }
 
@@ -367,19 +367,19 @@ elib_timer_err_t elib_timer_process_pending(elib_timer_ctx_t *ctx) {
     if (ctx == NULL) {
         return ELIB_TIMER_ERR_INVALID_PARAM;
     }
-    if (!ctx->initialized) {
+    if (!ctx->bit_flags.initialized) {
         return ELIB_TIMER_ERR_NOT_INITIALIZED;
     }
 
     for (uint32_t i = 0; i < ctx->max_timers; i++) {
         elib_timer_instance_t *timer = &ctx->timers[i];
 
-        if (!timer->pending_execution) {
+        if (!timer->bit_flags.pending_execution) {
             continue;
         }
 
         /* Clear pending flag */
-        timer->pending_execution = false;
+        timer->bit_flags.pending_execution = false;
 
         /* Execute callback */
         timer->callback(timer->user_data);

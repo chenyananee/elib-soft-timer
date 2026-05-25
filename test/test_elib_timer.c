@@ -41,7 +41,7 @@ static void test_init_valid(void) {
     printf("Test: init with valid parameters... ");
     reset_test();
 
-    assert(test_ctx.initialized == 1);
+    assert(test_ctx.bit_flags.initialized == 1);
     assert(test_ctx.max_timers == MAX_TIMERS);
     assert(test_ctx.active_count == 0);
 
@@ -94,7 +94,7 @@ static void test_create_valid(void) {
     assert(err == ELIB_TIMER_OK);
     assert(timer_id == 0);
     assert(test_ctx.active_count == 1);
-    assert(test_timers[timer_id].state == ELIB_TIMER_STATE_STOPPED);
+    assert(test_timers[timer_id].bit_flags.state == ELIB_TIMER_STATE_STOPPED);
     assert(test_timers[timer_id].period_ms == 1000);
 
     printf("PASSED\n");
@@ -166,12 +166,12 @@ static void test_start_stop(void) {
     /* Start timer */
     elib_timer_err_t err = elib_timer_start(&test_ctx, timer_id);
     assert(err == ELIB_TIMER_OK);
-    assert(test_timers[timer_id].state == ELIB_TIMER_STATE_RUNNING);
+    assert(test_timers[timer_id].bit_flags.state == ELIB_TIMER_STATE_RUNNING);
 
     /* Stop timer */
     err = elib_timer_stop(&test_ctx, timer_id);
     assert(err == ELIB_TIMER_OK);
-    assert(test_timers[timer_id].state == ELIB_TIMER_STATE_STOPPED);
+    assert(test_timers[timer_id].bit_flags.state == ELIB_TIMER_STATE_STOPPED);
 
     printf("PASSED\n");
 }
@@ -220,12 +220,12 @@ static void test_pause_resume(void) {
     /* Pause timer */
     elib_timer_err_t err = elib_timer_pause(&test_ctx, timer_id);
     assert(err == ELIB_TIMER_OK);
-    assert(test_timers[timer_id].state == ELIB_TIMER_STATE_PAUSED);
+    assert(test_timers[timer_id].bit_flags.state == ELIB_TIMER_STATE_PAUSED);
 
     /* Resume timer */
     err = elib_timer_resume(&test_ctx, timer_id);
     assert(err == ELIB_TIMER_OK);
-    assert(test_timers[timer_id].state == ELIB_TIMER_STATE_RUNNING);
+    assert(test_timers[timer_id].bit_flags.state == ELIB_TIMER_STATE_RUNNING);
 
     printf("PASSED\n");
 }
@@ -297,7 +297,7 @@ static void test_timer_expiration_immediate(void) {
     elib_timer_manager(&test_ctx, 1000);
 
     assert(callback_count[0] == 1);
-    assert(test_timers[timer_id].state == ELIB_TIMER_STATE_RUNNING);
+    assert(test_timers[timer_id].bit_flags.state == ELIB_TIMER_STATE_RUNNING);
     assert(test_timers[timer_id].remaining_ms == 1000);
 
     printf("PASSED\n");
@@ -317,13 +317,13 @@ static void test_timer_expiration_delayed(void) {
     elib_timer_manager(&test_ctx, 1000);
 
     assert(callback_count[1] == 0);
-    assert(test_timers[timer_id].pending_execution == true);
+    assert(test_timers[timer_id].bit_flags.pending_execution == true);
 
     /* Process pending callbacks */
     elib_timer_process_pending(&test_ctx);
 
     assert(callback_count[1] == 1);
-    assert(test_timers[timer_id].pending_execution == false);
+    assert(test_timers[timer_id].bit_flags.pending_execution == false);
 
     printf("PASSED\n");
 }
@@ -342,7 +342,7 @@ static void test_one_shot_timer(void) {
     elib_timer_manager(&test_ctx, 1000);
 
     assert(callback_count[2] == 1);
-    assert(test_timers[timer_id].state == ELIB_TIMER_STATE_EXPIRED);
+    assert(test_timers[timer_id].bit_flags.state == ELIB_TIMER_STATE_EXPIRED);
 
     /* Second expiration should not trigger callback */
     elib_timer_manager(&test_ctx, 1000);
@@ -366,7 +366,7 @@ static void test_delete_timer(void) {
     elib_timer_err_t err = elib_timer_delete(&test_ctx, timer_id);
     assert(err == ELIB_TIMER_OK);
     assert(test_ctx.active_count == 0);
-    assert(test_timers[timer_id].state == ELIB_TIMER_STATE_UNUSED);
+    assert(test_timers[timer_id].bit_flags.state == ELIB_TIMER_STATE_UNUSED);
 
     printf("PASSED\n");
 }

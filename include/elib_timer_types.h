@@ -37,7 +37,6 @@ typedef struct {
     /* User configuration */
     elib_timer_callback_t callback;    /* Callback function */
     void *user_data;                   /* User data pointer */
-    elib_timer_exec_mode_t exec_mode;  /* Execution mode */
 
     /* Timer parameters */
     uint32_t period_ms;                /* Timer period (milliseconds) */
@@ -45,9 +44,12 @@ typedef struct {
     uint32_t loop_count;               /* Loop count (ELIB_TIMER_LOOP_INFINITE=infinite) */
     uint32_t loop_remaining;           /* Remaining loop count */
 
-    /* State */
-    elib_timer_state_t state;          /* Timer state */
-    bool pending_execution;            /* Pending execution flag (delayed mode) */
+    /* Bit-packed flags */
+    struct {
+        uint8_t exec_mode : 1;        /* Execution mode */
+        uint8_t state : 3;            /* Timer state */
+        uint8_t pending_execution : 1;/* Pending execution flag (delayed mode) */
+    } bit_flags;
 } elib_timer_instance_t;
 
 /* Timer manager context structure (statically allocated by user) */
@@ -58,7 +60,11 @@ typedef struct {
 
     /* Runtime state */
     uint32_t active_count;             /* Active timer count */
-    int initialized;                   /* Initialization flag */
+
+    /* Bit-packed flags */
+    struct {
+        uint8_t initialized : 1;      /* Initialization flag */
+    } bit_flags;
 } elib_timer_ctx_t;
 
 #ifdef __cplusplus
