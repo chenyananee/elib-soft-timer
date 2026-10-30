@@ -1,45 +1,56 @@
 /* ============================================================================
- * elib_timer.h --- elib 软件定时器（elib-soft-timer）统一伞头
+ * elib_timer.h --- elib software timer (elib-soft-timer) unified umbrella header
  * ============================================================================
- * 本库全部公共 API 与公共类型集中于本单头。v2 起子头全部拆除。
- * 版本：ELIB_TIMER_VERSION（当前 2.0.0）
+ * The complete public API and public types of this library live in this single
+ * header. All sub-headers were removed as of v2.
+ * Version: ELIB_TIMER_VERSION (currently 2.0.0)
  *
- * 游戏规则（elib 家族 v2 通用）：
- *   1. C99；arm-gcc -std=c99 -Wall -Wextra -Werror -Iinclude 必须零告警通过。
- *   2. 零动态内存、零全局：ctx 与实例数组全部由用户静态提供。
- *   3. init 无条件 memset 覆盖重初始化，任意历史状态的 ctx 均可重入；
- *      非法配置（NULL / max_timers==0）在 init 处拒收。
- *   4. 库自身不加锁；ISR/主循环跨上下文使用需用户挂临界区钩子（见下），
- *      未挂钩时声明为单上下文使用。
- *   5. 源文件直连本伞头：#include "elib_timer.h"，-Iinclude 构建；
- *      禁止任何相对路径跨层 include。
- *   6. 无随库构建系统：编译期只有源文件 + 本头。
+ * Game rules (elib family v2 common principles):
+ *   1. C99; must compile warning-free with
+ *      arm-gcc -std=c99 -Wall -Wextra -Werror -Iinclude.
+ *   2. Zero dynamic memory, zero globals: the ctx and the instance array are
+ *      provided statically by the user.
+ *   3. init memset-overwrites and re-initializes unconditionally; a ctx in any
+ *      historical state is accepted; illegal configurations (NULL /
+ *      max_timers == 0) are rejected by init.
+ *   4. The library takes no locks of its own; cross-context use between an ISR
+ *      and the main loop requires the user-mounted critical-section hooks below.
+ *      When no hooks are mounted the library declares single-context use.
+ *   5. Source files include this umbrella header directly: #include
+ *      "elib_timer.h", built with -Iinclude; relative-path cross-layer includes
+ *      are forbidden.
+ *   6. No build system ships with the library: the only compile units are the
+ *      source files plus this header.
  *
- * 时间模型：
- *   时钟由外部驱动——反复调用 elib_timer_manager(ctx, ms_elapsed)，
- *   传入自上次调用以来经过的毫秒数（典型：1ms tick ISR 中每次喂 1）。
- *   单次调用最多产生一次到期判定（丢拍语义）：ms_elapsed 远大于周期时，
- *   落在边界外的多拍被丢弃、表现为周期性漂移。故 tick 粒度应远小于最小周期。
+ * Time model:
+ *   The clock is externally driven -- elib_timer_manager(ctx, ms_elapsed) is
+ *   called repeatedly with the milliseconds elapsed since the previous call
+ *   (typically 1 per 1 ms tick ISR). Each call produces at most one expiry
+ *   decision (lost-tick semantics): when ms_elapsed exceeds the remaining time,
+ *   the surplus beyond the boundary is dropped and the period restarts from a
+ *   full period, which shows up as periodic drift. Keep the tick granularity
+ *   far below the smallest timer period.
  *
- * 并发模型：
- *   elib_timer_manager() 供 tick ISR 调用，其余 API 供主循环调用。
- *   同一 ctx 跨上下文并发使用时，用户应挂临界区钩子（须为保存/恢复式、
- *   支持嵌套）：
- *     #define ELIB_TIMER_CRITICAL_ENTER()  uint32_t _pm_ = __get_PRIMASK(); __disable_irq()
- *     #define ELIB_TIMER_CRITICAL_EXIT()   __set_PRIMASK(_pm_)
- *   黑暗面：回调执行期间不持有临界区；回调内禁止重入库 API 的临界段。
+ * Concurrency model:
+ *   elib_timer_manager() is meant to run in the tick ISR; all other APIs run in
+ *   the main loop. When one ctx is used concurrently from both contexts, mount
+ *   the critical-section hooks (save/restore style, nesting-safe):
+ *     #define ELIB_TIMER_CRITICAL_ENTER()  ...
+ *     #define ELIB_TIMER_CRITICAL_EXIT()   ...
+ *   Dark side: no critical section is held while a callback runs.
  *
- * 回调契约：
- *   - IMMEDIATE：到期回调在 manager() 调用方上下文内直接执行（ISR！），
- *     必须短促、非阻塞。
- *   - DELAYED：到期只置 pending 标志；主循环经 elib_timer_process_pending()
- *     提取并以主循环上下文执行。
- *   - 回调内只允许"操作自己"的重入：对本定时器 delete/stop/start/
- *     set_period/set_loop_count/get_remaining。
- *   - 回调内 create 其他定时器、删除其他定时器、重入 manager /
- *     process_pending 均为未定义行为。
- *   - manager 在 IMMEDIATE 回调返回后复查 state==RUNNING 才装填下一轮
- *     remaining：回调内把自己 delete/stop 的，本轮不再装填。
+ * Callback contract:
+ *   - IMMEDIATE: expiry callbacks execute directly in the caller context of
+ *     manager() (i.e. the ISR!); they must be short and non-blocking.
+ *   - DELAYED: expiry only raises the pending flag; the main loop drains it via
+ *     elib_timer_process_pending() and executes callbacks in main-loop context.
+ *   - Reentrancy from a callback is legal only for operations on itself:
+ *     delete/stop/start/set_period/set_loop_count/get_remaining on that timer.
+ *   - Calling create, deleting other timers, or re-entering manager /
+ *     process_pending from a callback is undefined behaviour.
+ *   - After an IMMEDIATE callback returns, manager re-checks state == RUNNING
+ *     before loading the next period into remaining: a timer deleted/stopped by
+ *     its own callback is not reloaded in that round.
  * ==========================================================================*/
 #ifndef ELIB_TIMER_H
 #define ELIB_TIMER_H
@@ -52,17 +63,18 @@
 extern "C" {
 #endif
 
-/* ------------------------------------------------------------------ 版本 */
+/* --------------------------------------------------------------- version */
 #define ELIB_TIMER_VERSION        "2.0.0"
 #define ELIB_TIMER_VERSION_MAJOR  2
 #define ELIB_TIMER_VERSION_MINOR  0
 #define ELIB_TIMER_VERSION_PATCH  0
 
-/* ------------------------------------------------------------------ 配置 */
+/* ------------------------------------------------------------ configuration */
 /*
- * 临界区钩子（可选）：
- *   跨上下文使用（manager 在 ISR、其余在主循环）时由用户在外部预定义，
- *   须满足保存/恢复式、支持嵌套。未定义时默认空 = 单上下文契约。
+ * Critical-section hooks (optional):
+ *   Preset by the user for cross-context use (manager in the ISR, everything
+ *   else in the main loop). They must be save/restore style and nesting-safe.
+ *   When left undefined they expand to nothing = single-context contract.
  */
 #ifndef ELIB_TIMER_CRITICAL_ENTER
 #define ELIB_TIMER_CRITICAL_ENTER()
@@ -71,81 +83,82 @@ extern "C" {
 #define ELIB_TIMER_CRITICAL_EXIT()
 #endif
 
-/* 循环次数特值：0 = 无限循环，定时器永久运行。 */
+/* Loop-count special value: 0 = infinite, the timer runs forever. */
 #define ELIB_TIMER_LOOP_INFINITE  0u
 
-/* ------------------------------------------------------------------ 错误码 */
+/* --------------------------------------------------------------- error codes */
 typedef enum {
-    ELIB_TIMER_OK = 0,                 /* 成功 */
-    ELIB_TIMER_ERR_INVALID_PARAM,      /* 非法参数 / 非法枚举值 */
-    ELIB_TIMER_ERR_NOT_INITIALIZED,    /* manager 尚未 init（或已 deinit） */
-    ELIB_TIMER_ERR_NOT_FOUND,          /* 定时器 ID 无效或槽位未占用 */
-    ELIB_TIMER_ERR_FULL,               /* 实例池已满 */
-    ELIB_TIMER_ERR_ALREADY_RUNNING,    /* 定时器已处于 RUNNING */
-    ELIB_TIMER_ERR_NOT_RUNNING,        /* 定时器不处于可执行该操作的状态 */
-    ELIB_TIMER_ERR_EXECUTION_FAILED,   /* 回调执行失败（保留位） */
+    ELIB_TIMER_OK = 0,                 /* Success */
+    ELIB_TIMER_ERR_INVALID_PARAM,      /* Illegal parameter / enum value */
+    ELIB_TIMER_ERR_NOT_INITIALIZED,    /* Manager not initialized (or deinitialized) */
+    ELIB_TIMER_ERR_NOT_FOUND,          /* Invalid timer ID or unused slot */
+    ELIB_TIMER_ERR_FULL,               /* Instance pool is full */
+    ELIB_TIMER_ERR_ALREADY_RUNNING,    /* Timer is already RUNNING */
+    ELIB_TIMER_ERR_NOT_RUNNING,        /* Timer is not in a state that allows the operation */
+    ELIB_TIMER_ERR_EXECUTION_FAILED,   /* Callback execution failed (reserved) */
 } elib_timer_err_t;
 
-/* ------------------------------------------------------------------ 类型 */
-/* 定时器状态机：UNUSED →(create)→ STOPPED →(start)→ RUNNING ⇄ PAUSED
- * RUNNING →(到期且 loop 耗尽)→ EXPIRED；EXPIRED →(start)→ RUNNING 重开 */
+/* ------------------------------------------------------------------- types */
+/* State machine: UNUSED -(create)-> STOPPED -(start)-> RUNNING <-> PAUSED
+ * RUNNING -(expiry with loop count exhausted)-> EXPIRED;
+ * EXPIRED -(start)-> RUNNING re-arms */
 typedef enum {
-    ELIB_TIMER_STATE_UNUSED  = 0,      /* 槽位空闲 */
-    ELIB_TIMER_STATE_STOPPED,          /* 已创建未运行（stop 后亦回到此态） */
-    ELIB_TIMER_STATE_RUNNING,          /* 运行中，随 manager 倒计时 */
-    ELIB_TIMER_STATE_PAUSED,           /* 暂停，remaining 冻结 */
-    ELIB_TIMER_STATE_EXPIRED,          /* 有限 loop 计数耗尽（终态，可 start 重开） */
+    ELIB_TIMER_STATE_UNUSED  = 0,      /* Slot is free */
+    ELIB_TIMER_STATE_STOPPED,          /* Created but not running (stop returns here) */
+    ELIB_TIMER_STATE_RUNNING,          /* Running, counts down in manager */
+    ELIB_TIMER_STATE_PAUSED,           /* Paused, remaining is frozen */
+    ELIB_TIMER_STATE_EXPIRED,          /* Finite loop count exhausted (terminal, re-arm with start) */
 } elib_timer_state_t;
 
-/* 回调执行模式 */
+/* Callback execution mode */
 typedef enum {
-    ELIB_TIMER_MODE_IMMEDIATE = 0,     /* 到期即在 manager 上下文执行回调 */
-    ELIB_TIMER_MODE_DELAYED   = 1,     /* 到期置 pending，主循环统一提取执行 */
+    ELIB_TIMER_MODE_IMMEDIATE = 0,     /* Run the callback in manager context on expiry */
+    ELIB_TIMER_MODE_DELAYED   = 1,     /* Raise pending; the main loop drains it */
 } elib_timer_exec_mode_t;
 
-/* 回调函数原型 */
+/* Callback prototype */
 typedef void (*elib_timer_callback_t)(void *user_data);
 
-/* 单个定时器实例（用户静态数组元素） */
+/* Single timer instance (one element of the user's static array) */
 typedef struct {
-    /* 用户配置 */
-    elib_timer_callback_t callback;    /* 到期回调 */
-    void *user_data;                   /* 回调透传指针 */
+    /* User configuration */
+    elib_timer_callback_t callback;    /* Expiry callback */
+    void *user_data;                   /* Opaque pointer passed to the callback */
 
-    /* 运行参数（毫秒域） */
-    uint32_t period_ms;                /* 周期 */
-    uint32_t remaining_ms;             /* 本轮剩余（PAUSED 冻结、STOPPED 重置为 period） */
-    uint32_t loop_count;               /* 总循环次数（0 = 无限） */
-    uint32_t loop_remaining;           /* 剩余循环次数 */
+    /* Runtime parameters (millisecond domain) */
+    uint32_t period_ms;                /* Period */
+    uint32_t remaining_ms;             /* Remaining in the current round (frozen while PAUSED, reset to period while STOPPED) */
+    uint32_t loop_count;               /* Total loop count (0 = infinite) */
+    uint32_t loop_remaining;           /* Remaining loop count */
 
-    /* 位域标志 */
+    /* Bit-packed flags */
     struct {
         uint8_t exec_mode : 1;         /* elib_timer_exec_mode_t */
         uint8_t state : 3;             /* elib_timer_state_t */
-        uint8_t pending_execution : 1; /* DELAYED 到期待执行标志 */
+        uint8_t pending_execution : 1; /* DELAYED pending-expiry flag */
     } bit_flags;
 } elib_timer_instance_t;
 
-/* manager 上下文（用户静态分配 + init 初始化） */
+/* Manager context (statically allocated by the user, initialized by init) */
 typedef struct {
-    /* init 填写 */
-    elib_timer_instance_t *timers;     /* 实例数组首址 */
-    uint32_t max_timers;               /* 数组容量 */
+    /* Filled in by init */
+    elib_timer_instance_t *timers;     /* Instance array base pointer */
+    uint32_t max_timers;               /* Array capacity */
 
-    /* 运行状态 */
-    uint32_t active_count;             /* 非 UNUSED 槽位数 */
+    /* Runtime state */
+    uint32_t active_count;             /* Number of non-UNUSED slots */
 
     struct {
-        uint8_t initialized : 1;       /* init/deinit 标志 */
+        uint8_t initialized : 1;       /* init/deinit flag */
     } bit_flags;
 } elib_timer_ctx_t;
 
-/* ------------------------------------------------------------------ 生命周期 */
+/* --------------------------------------------------------------- lifecycle */
 /**
- * @brief 初始化定时器 manager
- * @param ctx 用户提供的上下文指针（任意历史状态，会被 memset 覆盖）
- * @param timers 用户提供的实例数组
- * @param max_timers 数组容量（须 >= 1）
+ * @brief Initialize the timer manager
+ * @param ctx User-provided context pointer (any historical state; memset-overwritten)
+ * @param timers User-provided instance array
+ * @param max_timers Array capacity (must be >= 1)
  * @return ELIB_TIMER_OK / ELIB_TIMER_ERR_INVALID_PARAM
  */
 elib_timer_err_t elib_timer_init(elib_timer_ctx_t *ctx,
@@ -153,20 +166,20 @@ elib_timer_err_t elib_timer_init(elib_timer_ctx_t *ctx,
                                  uint32_t max_timers);
 
 /**
- * @brief 反初始化 manager（各定时器实例原地保留，槽位不再可用）
- * @param ctx 上下文指针；NULL 安全
+ * @brief Deinitialize the manager (instances are kept in place; slots no longer usable)
+ * @param ctx Context pointer; NULL-safe
  */
 void elib_timer_deinit(elib_timer_ctx_t *ctx);
 
 /**
- * @brief 创建定时器（在第一个 UNUSED 槽位上，ID = 数组下标）
- * @param ctx 上下文
- * @param period_ms 周期毫秒（须 >= 1）
- * @param callback 到期回调（须非 NULL）
- * @param user_data 回调透传指针（可 NULL）
+ * @brief Create a timer (first UNUSED slot; ID = array index)
+ * @param ctx Context
+ * @param period_ms Period in milliseconds (must be >= 1)
+ * @param callback Expiry callback (must not be NULL)
+ * @param user_data Opaque pointer passed to the callback (may be NULL)
  * @param exec_mode ELIB_TIMER_MODE_IMMEDIATE / ELIB_TIMER_MODE_DELAYED
- * @param loop_count 循环次数：0 = 无限，N = 执行 N 次后转 EXPIRED
- * @param out_timer_id 输出 ID（须非 NULL）
+ * @param loop_count Loop count: 0 = infinite, N = fire N times then EXPIRED
+ * @param out_timer_id Output ID (must not be NULL)
  * @return OK / INVALID_PARAM / NOT_INITIALIZED / FULL
  */
 elib_timer_err_t elib_timer_create(elib_timer_ctx_t *ctx,
@@ -178,47 +191,48 @@ elib_timer_err_t elib_timer_create(elib_timer_ctx_t *ctx,
                                    uint32_t *out_timer_id);
 
 /**
- * @brief 删除定时器（槽位回归 UNUSED；清除 pending 标志）
+ * @brief Delete a timer (slot returns to UNUSED; pending flag is cleared)
  * @return OK / INVALID_PARAM / NOT_INITIALIZED / NOT_FOUND
  */
 elib_timer_err_t elib_timer_delete(elib_timer_ctx_t *ctx, uint32_t timer_id);
 
-/* ------------------------------------------------------------------ 状态控制 */
+/* ---------------------------------------------------------- state control */
 /**
- * @brief 启动定时器（remaining 重置为 period；loop_remaining 重置为 loop_count）
+ * @brief Start a timer (remaining reset to period; loop_remaining reset to loop_count)
  *
- * 允许自 STOPPED / PAUSED / EXPIRED 启动；RUNNING 返回 ALREADY_RUNNING。
+ * Starting from STOPPED / PAUSED / EXPIRED is allowed; RUNNING returns
+ * ALREADY_RUNNING.
  * @return OK / INVALID_PARAM / NOT_INITIALIZED / NOT_FOUND / ALREADY_RUNNING
  */
 elib_timer_err_t elib_timer_start(elib_timer_ctx_t *ctx, uint32_t timer_id);
 
 /**
- * @brief 停止定时器（全重置语义：remaining 复位为 period，回到 STOPPED）
+ * @brief Stop a timer (full-reset semantics: remaining reset to period, state STOPPED)
  *
- * 拒收 STOPPED / UNUSED；允许自 RUNNING / PAUSED / EXPIRED 停止。
+ * STOPPED / UNUSED are rejected; RUNNING / PAUSED / EXPIRED may be stopped.
  * @return OK / INVALID_PARAM / NOT_INITIALIZED / NOT_FOUND / NOT_RUNNING
  */
 elib_timer_err_t elib_timer_stop(elib_timer_ctx_t *ctx, uint32_t timer_id);
 
 /**
- * @brief 暂停定时器（仅 RUNNING 可暂停；remaining 冻结在暂停瞬间值）
+ * @brief Pause a timer (RUNNING only; remaining freezes at the pause instant)
  * @return OK / INVALID_PARAM / NOT_INITIALIZED / NOT_FOUND / NOT_RUNNING
  */
 elib_timer_err_t elib_timer_pause(elib_timer_ctx_t *ctx, uint32_t timer_id);
 
 /**
- * @brief 恢复定时器（仅 PAUSED 可恢复，从冻结值继续倒计数）
+ * @brief Resume a timer (PAUSED only; continues counting from the frozen value)
  * @return OK / INVALID_PARAM / NOT_INITIALIZED / NOT_FOUND / NOT_RUNNING
  */
 elib_timer_err_t elib_timer_resume(elib_timer_ctx_t *ctx, uint32_t timer_id);
 
-/* ------------------------------------------------------------------ 动态配置 */
+/* --------------------------------------------------------- dynamic config */
 /**
- * @brief 运行时修改周期
+ * @brief Change the period at runtime
  *
- * RUNNING / PAUSED 定时器按比例缩放剩余时间
- * （remaining' = remaining * new / old，64 位中间量，向下取整，0 钳 1）；
- * STOPPED / EXPIRED 不缩放（stop/start 自会重置）。
+ * RUNNING / PAUSED timers rescale their remaining time proportionally
+ * (remaining' = remaining * new / old, 64-bit intermediate, truncated, clamped
+ * to 1); STOPPED / EXPIRED are left unscaled (stop/start reset it anyway).
  * @return OK / INVALID_PARAM / NOT_INITIALIZED / NOT_FOUND
  */
 elib_timer_err_t elib_timer_set_period(elib_timer_ctx_t *ctx,
@@ -226,34 +240,36 @@ elib_timer_err_t elib_timer_set_period(elib_timer_ctx_t *ctx,
                                        uint32_t period_ms);
 
 /**
- * @brief 运行时修改循环次数（loop_remaining 立即重置为新值，重新计数）
+ * @brief Change the loop count at runtime (loop_remaining resets immediately and counting restarts)
  * @return OK / INVALID_PARAM / NOT_INITIALIZED / NOT_FOUND
  */
 elib_timer_err_t elib_timer_set_loop_count(elib_timer_ctx_t *ctx,
                                            uint32_t timer_id,
                                            uint32_t loop_count);
 
-/* ------------------------------------------------------------------ 查询 */
+/* ------------------------------------------------------------------ query */
 /**
- * @brief 查询剩余毫秒数（RUNNING：动态；PAUSED：冻结；STOPPED/STOP 后：period；EXPIRED：0）
+ * @brief Query the remaining milliseconds (RUNNING: live; PAUSED: frozen;
+ *        STOPPED/after stop: period; EXPIRED: 0)
  * @return OK / INVALID_PARAM / NOT_INITIALIZED / NOT_FOUND
  */
 elib_timer_err_t elib_timer_get_remaining(elib_timer_ctx_t *ctx,
                                           uint32_t timer_id,
                                           uint32_t *out_remaining_ms);
 
-/* ------------------------------------------------------------------ 驱动 */
+/* ------------------------------------------------------------------ driver */
 /**
- * @brief 定时器驱动（tick ISR 中调用；每此喂入经过毫秒数）
+ * @brief Timer driver (call from the tick ISR; feed the elapsed milliseconds)
  *
- * 单次调用最多一轮到期判定（丢拍语义）；IMMEDIATE 定时器到期回调在本
- * 调用内同步执行；DELAYED 只置 pending 由 process_pending 提取。
+ * One call performs at most one expiry decision (lost-tick semantics). IMMEDIATE
+ * timers run their callback synchronously inside this call; DELAYED timers only
+ * raise pending for process_pending to drain.
  * @return OK / INVALID_PARAM / NOT_INITIALIZED
  */
 elib_timer_err_t elib_timer_manager(elib_timer_ctx_t *ctx, uint32_t ms_elapsed);
 
 /**
- * @brief 提取执行 DELAYED 模式的 pending 回调（主循环调用，按槽位序号顺序执行）
+ * @brief Drain pending DELAYED callbacks (call from the main loop, in slot-index order)
  * @return OK / INVALID_PARAM / NOT_INITIALIZED
  */
 elib_timer_err_t elib_timer_process_pending(elib_timer_ctx_t *ctx);

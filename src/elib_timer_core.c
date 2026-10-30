@@ -1,19 +1,23 @@
 /* ============================================================================
- * elib_timer_core.c --- elib 软件定时器实现（v2）
+ * elib_timer_core.c --- elib software timer implementation (v2)
  * ============================================================================
- * 唯一源文件，直连伞头。语义契约见 elib_timer.h 顶注：
- *   - 丢拍语义：manager 单次调用最多一轮到期判定。
- *   - IMMEDIATE 回调返回后复查 state==RUNNING 才装填下一轮 remaining。
- *   - delete 清除 pending 标志；process_pending 双保险跳过 UNUSED 槽位。
- *   - set_period 对 RUNNING / PAUSED 按比例缩放 remaining。
- *   - 所有跨上下文共享段由 ELIB_TIMER_CRITICAL_ENTER/EXIT 覆盖。
+ * The single source file; includes the umbrella header directly. The semantic
+ * contract lives in the header banner of elib_timer.h:
+ *   - Lost-tick semantics: one manager call performs at most one expiry decision.
+ *   - After an IMMEDIATE callback returns, state == RUNNING is re-checked before
+ *     loading the next period into remaining.
+ *   - delete clears the pending flag; process_pending additionally skips UNUSED
+ *     slots as a second line of defence.
+ *   - set_period rescales remaining for RUNNING / PAUSED timers.
+ *   - Every section shared across contexts is covered by the
+ *     ELIB_TIMER_CRITICAL_ENTER/EXIT hooks.
  * ==========================================================================*/
 #include "elib_timer.h"
 #include <string.h>
 
-/* ------------------------------------------------------------------ 内部工具 */
+/* -------------------------------------------------------------- internal helpers */
 
-/* 按下标取实例（ID = 数组下标），越界返回 NULL */
+/* Fetch the instance by index (ID = array index); NULL when out of range */
 static elib_timer_instance_t *get_timer_by_id(elib_timer_ctx_t *ctx,
                                               uint32_t timer_id) {
     if (timer_id >= ctx->max_timers) {
@@ -22,7 +26,7 @@ static elib_timer_instance_t *get_timer_by_id(elib_timer_ctx_t *ctx,
     return &ctx->timers[timer_id];
 }
 
-/* ------------------------------------------------------------------ 生命周期 */
+/* -------------------------------------------------------------- lifecycle */
 
 elib_timer_err_t elib_timer_init(elib_timer_ctx_t *ctx,
                                  elib_timer_instance_t *timers,
@@ -52,7 +56,7 @@ void elib_timer_deinit(elib_timer_ctx_t *ctx) {
     ELIB_TIMER_CRITICAL_EXIT();
 }
 
-/* ------------------------------------------------------------------ create / delete */
+/* -------------------------------------------------------------- create / delete */
 
 elib_timer_err_t elib_timer_create(elib_timer_ctx_t *ctx,
                                    uint32_t period_ms,
@@ -77,7 +81,7 @@ elib_timer_err_t elib_timer_create(elib_timer_ctx_t *ctx,
 
     ELIB_TIMER_CRITICAL_ENTER();
 
-    /* 找第一个 UNUSED 槽位（ID = 下标） */
+    /* Find the first UNUSED slot (ID = index) */
     uint32_t timer_id = ctx->max_timers;
     for (uint32_t i = 0u; i < ctx->max_timers; i++) {
         if (ctx->timers[i].bit_flags.state == ELIB_TIMER_STATE_UNUSED) {
@@ -128,7 +132,7 @@ elib_timer_err_t elib_timer_delete(elib_timer_ctx_t *ctx, uint32_t timer_id) {
     }
 
     timer->bit_flags.state = ELIB_TIMER_STATE_UNUSED;
-    timer->bit_flags.pending_execution = 0u;    /* 防 pending+delete 竞态引爆 */
+    timer->bit_flags.pending_execution = 0u;    /* Prevent the pending+delete race from firing */
     ctx->active_count--;
 
     ELIB_TIMER_CRITICAL_EXIT();
@@ -136,7 +140,7 @@ elib_timer_err_t elib_timer_delete(elib_timer_ctx_t *ctx, uint32_t timer_id) {
     return ELIB_TIMER_OK;
 }
 
-/* ------------------------------------------------------------------ start / stop / pause / resume */
+/* -------------------------------------------------------------- start / stop / pause / resume */
 
 elib_timer_err_t elib_timer_start(elib_timer_ctx_t *ctx, uint32_t timer_id) {
     if (ctx == NULL) {
@@ -253,7 +257,7 @@ elib_timer_err_t elib_timer_resume(elib_timer_ctx_t *ctx, uint32_t timer_id) {
     return ELIB_TIMER_OK;
 }
 
-/* ------------------------------------------------------------------ 动态配置 */
+/* -------------------------------------------------------------- dynamic config */
 
 elib_timer_err_t elib_timer_set_period(elib_timer_ctx_t *ctx,
                                        uint32_t timer_id,
@@ -279,7 +283,7 @@ elib_timer_err_t elib_timer_set_period(elib_timer_ctx_t *ctx,
     uint32_t old_period = timer->period_ms;
     timer->period_ms = period_ms;
 
-    /* RUNNING / PAUSED 按比例缩放剩余时间；64 位中间量防溢出，0 钳 1 */
+    /* RUNNING / PAUSED rescale remaining; 64-bit intermediate avoids overflow, clamped to 1 */
     if (timer->bit_flags.state == ELIB_TIMER_STATE_RUNNING ||
         timer->bit_flags.state == ELIB_TIMER_STATE_PAUSED) {
         uint64_t scaled =
@@ -289,7 +293,7 @@ elib_timer_err_t elib_timer_set_period(elib_timer_ctx_t *ctx,
             timer->remaining_ms = 1u;
         }
     }
-    /* STOPPED / EXPIRED 不缩放：stop/start 自会重置 remaining */
+    /* STOPPED / EXPIRED are not rescaled: stop/start reset remaining anyway */
 
     ELIB_TIMER_CRITICAL_EXIT();
 
@@ -322,7 +326,7 @@ elib_timer_err_t elib_timer_set_loop_count(elib_timer_ctx_t *ctx,
     return ELIB_TIMER_OK;
 }
 
-/* ------------------------------------------------------------------ 查询 */
+/* -------------------------------------------------------------- query */
 
 elib_timer_err_t elib_timer_get_remaining(elib_timer_ctx_t *ctx,
                                           uint32_t timer_id,
@@ -349,7 +353,7 @@ elib_timer_err_t elib_timer_get_remaining(elib_timer_ctx_t *ctx,
     return ELIB_TIMER_OK;
 }
 
-/* ------------------------------------------------------------------ 驱动 */
+/* -------------------------------------------------------------- driver */
 
 elib_timer_err_t elib_timer_manager(elib_timer_ctx_t *ctx, uint32_t ms_elapsed) {
     if (ctx == NULL) {
@@ -369,10 +373,10 @@ elib_timer_err_t elib_timer_manager(elib_timer_ctx_t *ctx, uint32_t ms_elapsed) 
             continue;
         }
 
-        /* ---- 临界段：倒计数 / 到期判定 / 标志变更 */
+        /* ---- Critical section: countdown / expiry decision / flag updates */
         ELIB_TIMER_CRITICAL_ENTER();
 
-        /* 锁内复查（主循环 API 可能刚改动过状态） */
+        /* Re-check under the lock (a main-loop API may have just changed the state) */
         if (timer->bit_flags.state != ELIB_TIMER_STATE_RUNNING) {
             ELIB_TIMER_CRITICAL_EXIT();
             continue;
@@ -384,7 +388,7 @@ elib_timer_err_t elib_timer_manager(elib_timer_ctx_t *ctx, uint32_t ms_elapsed) 
         if (timer->remaining_ms > ms_elapsed) {
             timer->remaining_ms -= ms_elapsed;
         } else {
-            /* 到期（丢拍语义：越界的多余时间丢弃） */
+            /* Expired (lost-tick semantics: surplus time beyond the boundary is dropped) */
             timer->remaining_ms = 0u;
 
             if (timer->loop_count > 0u) {
@@ -404,12 +408,13 @@ elib_timer_err_t elib_timer_manager(elib_timer_ctx_t *ctx, uint32_t ms_elapsed) 
 
         ELIB_TIMER_CRITICAL_EXIT();
 
-        /* ---- 回调执行在临界段之外 */
+        /* ---- Callback runs outside the critical section */
         if (run_immediate) {
             timer->callback(timer->user_data);
         }
 
-        /* ---- 下一轮装填：回调/主循环可能已 STOP 自己，复查后才装填 */
+        /* ---- Next-round reload: the callback / main loop may have stopped this
+         *      timer, so re-check before loading */
         if (continue_running) {
             ELIB_TIMER_CRITICAL_ENTER();
             if (timer->bit_flags.state == ELIB_TIMER_STATE_RUNNING) {
@@ -435,7 +440,8 @@ elib_timer_err_t elib_timer_process_pending(elib_timer_ctx_t *ctx) {
 
         ELIB_TIMER_CRITICAL_ENTER();
 
-        /* 取标志 + 清标志在临界段内；UNUSED 槽位双保险跳过 */
+        /* Test-and-clear the flag inside the critical section; skip UNUSED slots
+         * as a second line of defence */
         if (!timer->bit_flags.pending_execution ||
             timer->bit_flags.state == ELIB_TIMER_STATE_UNUSED) {
             ELIB_TIMER_CRITICAL_EXIT();
@@ -445,7 +451,8 @@ elib_timer_err_t elib_timer_process_pending(elib_timer_ctx_t *ctx) {
 
         ELIB_TIMER_CRITICAL_EXIT();
 
-        /* 回调在临界段外执行；回调内操作自己的契约仍然适用 */
+        /* The callback runs outside the critical section; the self-only
+         * reentrancy contract still applies */
         timer->callback(timer->user_data);
     }
 
